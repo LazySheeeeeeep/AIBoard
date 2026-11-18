@@ -162,9 +162,9 @@ class DashboardController(QtCore.QObject):
                         if os.path.isdir(sub_p):
                             watch_targets.append(sub_p)
                     try:
-                        for entry in os.listdir(base_d)[:15]:
+                        for entry in os.listdir(base_d)[:20]:
                             ep = os.path.join(base_d, entry)
-                            if entry.lower().endswith((".sqlite", ".sqlite-wal", ".db")):
+                            if entry.lower().endswith((".sqlite", ".sqlite-wal", ".db")) or entry.lower() == "session_index.jsonl":
                                 watch_targets.append(ep)
                             elif key == "antigravity_dirs" and os.path.isdir(ep):
                                 log_d = os.path.join(ep, ".system_generated", "logs")

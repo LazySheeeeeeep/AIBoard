@@ -169,6 +169,65 @@ class TestDashboardSuite(unittest.TestCase):
         agy_acc = [a for a in st_quota.get_accounts() if a["id"] == "antigravity"][0]
         self.assertEqual(agy_acc["remaining_pct"], 68)
 
+    def test_sidebar_title_extraction_codex_and_antigravity(self) -> None:
+        """测试：Codex session_index.jsonl 优先覆盖伪装在 threads.title 里的原始 prompt，以及 Antigravity Protobuf 标题解码"""
+        import base64
+        from core.scanner import decode_protobuf_uuid_titles
+
+        def _pb_ld(field_no: int, data: bytes) -> bytes:
+            tag = (field_no << 3) | 2
+            length = len(data)
+            out = bytearray([tag])
+            while length >= 0x80:
+                out.append((length & 0x7F) | 0x80)
+                length >>= 7
+            out.append(length)
+            out.extend(data)
+            return bytes(out)
+
+        # 构造模拟 Antigravity state.vscdb Base64 Protobuf (含内层 base64 TrajectorySummary 与 file:// URI 干扰)
+        test_uuid = "4289cb93-c792-479c-a538-0fb38a23da55"
+        inner_summary = (
+            _pb_ld(1, "个人桌面 AI 看板开发".encode("utf-8"))
+            + _pb_ld(2, "file:///d:/LongApp".encode("utf-8"))
+        )
+        inner_b64 = base64.b64encode(inner_summary)
+        entry_msg = _pb_ld(1, test_uuid.encode("utf-8")) + _pb_ld(2, inner_b64)
+        top_pb_b64 = base64.b64encode(_pb_ld(1, entry_msg)).decode("ascii")
+
+        decoded = decode_protobuf_uuid_titles(top_pb_b64)
+        self.assertEqual(decoded.get(test_uuid), "个人桌面 AI 看板开发")
+
+        # 构造模拟 Codex：threads.title 被塞入了原始长 prompt，而 session_index.jsonl 有真实会话标题
+        now = time.time()
+        iso_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        c_root = os.path.join(self.tmp_dir, "mock_codex_idx")
+        s_dir = os.path.join(c_root, "sessions", "2026", "11", "18")
+        os.makedirs(s_dir)
+        tid = "019eb9cc-8c38-7751-ba00-9b1534f9bb8c"
+        raw_long_prompt = "我想让你帮我详细检查一下后端所有的微服务日志以及数据库连接池超时的问题并给出修复代码"
+        r_path = os.path.join(s_dir, "rollout-2026-11-18T10-00-00-{}.jsonl".format(tid))
+        with open(r_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": iso_now, "type": "event_msg", "payload": {"type": "user_message", "message": raw_long_prompt}}, ensure_ascii=False) + "\n")
+            f.write(json.dumps({"timestamp": iso_now, "type": "event_msg", "payload": {"type": "task_complete"}}) + "\n")
+
+        db_p = os.path.join(c_root, "state_5.sqlite")
+        conn = sqlite3.connect(db_p)
+        conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, first_user_message TEXT, cwd TEXT, rollout_path TEXT, updated_at INTEGER, archived INTEGER)")
+        # 模拟 Codex 把原始长 prompt 直接存进了 threads.title！
+        conn.execute("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)", (tid, raw_long_prompt, raw_long_prompt, "D:\\LongApp", r_path, int(now), 0))
+        conn.commit()
+        conn.close()
+
+        with open(os.path.join(c_root, "session_index.jsonl"), "w", encoding="utf-8") as idxf:
+            idxf.write(json.dumps({"id": tid, "thread_name": "微服务连接池超时修复", "updated_at": iso_now}, ensure_ascii=False) + "\n")
+
+        scanner = LocalAIScanner()
+        sessions, _st, _rl = scanner._scan_codex([c_root], now, now - 3600, now - 3600)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["title"], "微服务连接池超时修复")
+        self.assertEqual(sessions[0]["last_prompt"], raw_long_prompt)
+
     def test_todo_edit_survives_auto_refresh(self) -> None:
         """回归测试：编辑对话框打开期间触发自动刷新，不得崩溃，且编辑结果必须保存成功"""
         from PyQt5 import QtCore, QtGui
