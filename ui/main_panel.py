@@ -371,15 +371,49 @@ class MainDashboardPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
     # 数据渲染逻辑
     # ------------------------------------------------------------------
+    def _ui_busy(self) -> bool:
+        """有模态对话框或弹出菜单正在显示时为 True —— 此时绝不能销毁/重建列表控件"""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return False
+        return (
+            app.activeModalWidget() is not None
+            or app.activePopupWidget() is not None
+        )
+
+    def _flush_deferred_render(self) -> None:
+        if getattr(self, "_render_deferred", False):
+            if self._ui_busy():
+                QtCore.QTimer.singleShot(500, self._flush_deferred_render)
+                return
+            self._render_deferred = False
+            self.render_all(None)
+
+    def _defer_if_busy(self) -> bool:
+        """若有弹窗/菜单打开则推迟渲染并返回 True（调用方应直接 return）"""
+        if self._ui_busy():
+            if not getattr(self, "_render_deferred", False):
+                self._render_deferred = True
+                QtCore.QTimer.singleShot(500, self._flush_deferred_render)
+            return True
+        return False
+
     def render_all(self, scan_data: Optional[Dict[str, Any]] = None) -> None:
         if scan_data is not None:
             self._scan_data = scan_data
 
+        # 对话框 / 右键菜单打开期间推迟刷新，避免刷新销毁其父控件导致崩溃
+        if self._defer_if_busy():
+            return
+
+        self._render_deferred = False
         self._render_quotas()
         self._render_sessions()
         self._render_todos()
 
     def _render_quotas(self) -> None:
+        if self._defer_if_busy():
+            return
         self._clear_layout(self.quota_list_layout)
         visible_accounts = self.storage.get_accounts(only_visible=True)
 
@@ -496,6 +530,8 @@ class MainDashboardPanel(QtWidgets.QWidget):
             self.filter_row.addWidget(unhide_btn)
 
     def _render_sessions(self) -> None:
+        if self._defer_if_busy():
+            return
         self._clear_layout(self.session_list_layout)
         merged = self.build_merged_sessions()
         self._rebuild_filter_bar(merged)
@@ -532,6 +568,8 @@ class MainDashboardPanel(QtWidgets.QWidget):
             self.session_list_layout.addWidget(card)
 
     def _render_todos(self) -> None:
+        if self._defer_if_busy():
+            return
         self._clear_layout(self.todo_list_layout)
         todos = self.storage.get_todos()
         total_cnt = len(todos)
@@ -558,6 +596,7 @@ class MainDashboardPanel(QtWidgets.QWidget):
             row.pinRequested.connect(self._on_todo_pin)
             row.priorityCycleRequested.connect(self._on_todo_prio)
             row.editRequested.connect(self._on_todo_edit)
+            row.editDialogRequested.connect(self._open_todo_edit_dialog)
             self.todo_list_layout.addWidget(row)
 
     def _clear_layout(self, layout: QtWidgets.QLayout) -> None:
@@ -693,6 +732,19 @@ class MainDashboardPanel(QtWidgets.QWidget):
     def _on_todo_prio(self, todo_id: str, next_prio: str) -> None:
         self.storage.update_todo(todo_id, priority=next_prio)
         self._render_todos()
+
+    def _open_todo_edit_dialog(self, todo_id: str, current_text: str) -> None:
+        """由主面板（长期存活）持有编辑对话框；保存时按 id 更新，不依赖已可能被销毁的条目控件"""
+        new_text, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "编辑待办事项",
+            "修改待办内容:",
+            QtWidgets.QLineEdit.Normal,
+            current_text,
+        )
+        if ok and new_text.strip():
+            self._on_todo_edit(todo_id, new_text.strip())
+        self._flush_deferred_render()
 
     def _on_todo_edit(self, todo_id: str, new_text: str) -> None:
         self.storage.update_todo(todo_id, text=new_text)

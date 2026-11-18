@@ -169,6 +169,52 @@ class TestDashboardSuite(unittest.TestCase):
         agy_acc = [a for a in st_quota.get_accounts() if a["id"] == "antigravity"][0]
         self.assertEqual(agy_acc["remaining_pct"], 68)
 
+    def test_todo_edit_survives_auto_refresh(self) -> None:
+        """回归测试：编辑对话框打开期间触发自动刷新，不得崩溃，且编辑结果必须保存成功"""
+        from PyQt5 import QtCore, QtGui
+        from ui.widgets import TodoItemRow
+
+        qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        st = DashboardStorage(data_dir=os.path.join(self.tmp_dir, "edit_state"))
+        panel = MainDashboardPanel(st, always_on_top=True)
+        panel.render_all({})
+        panel.show()
+        qapp.processEvents()
+
+        target_id = st.get_todos()[0]["id"]
+        state = {"refresh_returned": False, "modal_seen": False}
+
+        def refresh_while_dialog_open() -> None:
+            panel.render_all({})  # 模拟 5 秒自动扫描刷新
+            state["refresh_returned"] = True
+
+        def finish_dialog() -> None:
+            dlg = QtWidgets.QApplication.activeModalWidget()
+            state["modal_seen"] = dlg is not None
+            if dlg is not None:
+                dlg.setTextValue("改名成功")
+                dlg.accept()
+
+        QtCore.QTimer.singleShot(150, refresh_while_dialog_open)
+        QtCore.QTimer.singleShot(500, finish_dialog)
+
+        row = panel.findChildren(TodoItemRow)[0]
+        ev = QtGui.QMouseEvent(
+            QtCore.QEvent.MouseButtonDblClick,
+            QtCore.QPointF(5, 5),
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+        row.mouseDoubleClickEvent(ev)  # 阻塞直到对话框关闭；旧实现会在此处抛 RuntimeError 闪退
+        qapp.processEvents()
+
+        self.assertTrue(state["modal_seen"])
+        self.assertTrue(state["refresh_returned"])
+        texts = {t["id"]: t["text"] for t in st.get_todos()}
+        self.assertEqual(texts[target_id], "改名成功")
+        panel.close()
+
     def test_ui_widgets_smoke(self) -> None:
         qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         st = DashboardStorage(data_dir=os.path.join(self.tmp_dir, "ui_state"))

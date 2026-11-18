@@ -1223,6 +1223,7 @@ class TodoItemRow(PaperCardFrame):
     pinRequested = QtCore.pyqtSignal(str, bool)
     priorityCycleRequested = QtCore.pyqtSignal(str, str)
     editRequested = QtCore.pyqtSignal(str, str)
+    editDialogRequested = QtCore.pyqtSignal(str, str)
 
     def __init__(
         self, todo: Dict[str, Any], parent: Optional[QtWidgets.QWidget] = None
@@ -1292,14 +1293,8 @@ class TodoItemRow(PaperCardFrame):
         row.addWidget(del_btn, 0, QtCore.Qt.AlignTop)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        # 不在条目内部弹对话框：条目会随自动刷新被销毁，对话框必须由长期存活的主面板持有。
         if event.button() == QtCore.Qt.LeftButton:
-            new_text, ok = QtWidgets.QInputDialog.getText(
-                self,
-                "编辑待办事项",
-                "修改待办内容:",
-                QtWidgets.QLineEdit.Normal,
-                str(self.todo.get("text", "")),
-            )
-            if ok and new_text.strip():
-                self.editRequested.emit(self.todo_id, new_text.strip())
+            self.editDialogRequested.emit(self.todo_id, str(self.todo.get("text", "")))
+            return
         super(TodoItemRow, self).mouseDoubleClickEvent(event)

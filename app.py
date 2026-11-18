@@ -450,6 +450,47 @@ def _notify_existing_instance(replace_existing: bool = True) -> bool:
     return False
 
 
+_CRASH_LOG_HANDLE = None  # keep faulthandler's file handle alive for the whole process
+
+
+def _install_crash_guard() -> None:
+    """
+    PyQt5 会在「槽函数里出现未捕获异常」时直接 abort 整个进程（pythonw 下表现为无声闪退）。
+    这里改为：把异常写进 %APPDATA%\\AIBoard\\crash.log 并继续运行；
+    同时开启 faulthandler 记录原生层崩溃，方便远程排查。
+    """
+    import datetime
+    import traceback
+
+    from core.storage import resolve_user_data_dir
+
+    try:
+        log_dir = resolve_user_data_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "crash.log")
+    except Exception:
+        return
+
+    def _hook(exc_type, exc, tb) -> None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\n[{}] Unhandled exception\n".format(datetime.datetime.now().isoformat(timespec="seconds")))
+                f.write("".join(traceback.format_exception(exc_type, exc, tb)))
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+    global _CRASH_LOG_HANDLE
+    try:
+        import faulthandler
+
+        _CRASH_LOG_HANDLE = open(log_path, "a", encoding="utf-8")
+        faulthandler.enable(file=_CRASH_LOG_HANDLE, all_threads=True)
+    except Exception:
+        pass
+
+
 def main() -> int:
     # 命令行子命令：一键配置 / 关闭自启 / 状态查看（无需启动 GUI）
     if "--setup" in sys.argv or "setup" in sys.argv[1:2]:
@@ -462,6 +503,7 @@ def main() -> int:
         from core.setup_cli import print_status
         return print_status()
 
+    _install_crash_guard()
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
