@@ -5,7 +5,11 @@
 #   $env:AIBOARD_YES = "1"         -> non-interactive setup with recommended defaults
 #   $env:AIBOARD_SKIP_SETUP = "1"  -> skip the setup wizard (used by `aiboard update`)
 
-$ErrorActionPreference = "Stop"
+# NOTE: do NOT use "Stop" globally. Windows PowerShell 5.1 turns any stderr output of a native
+# command (e.g. the expected ImportError traceback, pip warnings) into a terminating error.
+# We use "Continue" and check $LASTEXITCODE / use -ErrorAction Stop on cmdlets explicitly.
+$ErrorActionPreference = "Continue"
+$ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Repo       = "LazySheeeeeeep/AIBoard"
@@ -89,12 +93,12 @@ Step "Downloading AI BOARD ($Branch) ..."
 $tmp = Join-Path $env:TEMP ("aiboard_" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $zip = Join-Path $tmp "src.zip"
-Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/archive/refs/heads/$Branch.zip" -OutFile $zip
-Expand-Archive -Path $zip -DestinationPath $tmp -Force
+Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/archive/refs/heads/$Branch.zip" -OutFile $zip -ErrorAction Stop
+Expand-Archive -Path $zip -DestinationPath $tmp -Force -ErrorAction Stop
 $srcRoot = Get-ChildItem $tmp -Directory | Select-Object -First 1
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-Item -Path (Join-Path $srcRoot.FullName "*") -Destination $InstallDir -Recurse -Force
+Copy-Item -Path (Join-Path $srcRoot.FullName "*") -Destination $InstallDir -Recurse -Force -ErrorAction Stop
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Ok "Installed to $InstallDir"
 
@@ -102,10 +106,18 @@ Ok "Installed to $InstallDir"
 # 3. Dependencies
 # ---------------------------------------------------------------------------
 Step "Installing dependencies (PyQt5) ..."
-& $Python -c "import PyQt5.QtWidgets" 2>$null
+$null = & $Python -c "import PyQt5.QtWidgets" 2>&1
 if ($LASTEXITCODE -ne 0) {
-    & $Python -m pip install --user --disable-pip-version-check -q -r (Join-Path $InstallDir "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
+    Write-Host "    PyQt5 not found, installing via pip (this may take a minute) ..." -ForegroundColor DarkGray
+    & $Python -m pip install --user --disable-pip-version-check -q -r (Join-Path $InstallDir "requirements.txt") 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match "ERROR" } | Write-Host -ForegroundColor Red
+    $null = & $Python -c "import PyQt5.QtWidgets" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "Failed to install PyQt5 automatically." -ForegroundColor Red
+        Write-Host "Try manually:  `"$Python`" -m pip install PyQt5" -ForegroundColor Yellow
+        Write-Host "If your network is slow, add a mirror:  -i https://pypi.tuna.tsinghua.edu.cn/simple" -ForegroundColor Yellow
+        return
+    }
     Ok "PyQt5 installed"
 } else {
     Ok "PyQt5 already available"
