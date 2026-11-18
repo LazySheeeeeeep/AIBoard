@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local user data (todos / settings) - never commit
+data/
+portable.flag
+*.json.bak
+*.json.tmp
+
+# Test & preview temp dirs
+_tmp_*/
+_tmp_preview/
+
+# Packaging output
+build/
+dist/
+*.spec
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
